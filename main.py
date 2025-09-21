@@ -79,6 +79,7 @@ def define_P(depth=0.3, steps=20):
     for i in range(n): edges.append((i,i+n))
     return verts, edges
 
+
 class Canvas(glcanvas.GLCanvas):
     def __init__(self, parent):
         super().__init__(parent, -1, attribList=[glcanvas.WX_GL_RGBA, glcanvas.WX_GL_DOUBLEBUFFER])
@@ -88,10 +89,12 @@ class Canvas(glcanvas.GLCanvas):
         self.timer.Start(16)
 
         # трансформации буквы
-        self.rx=self.ry=self.rz=0.0
         self.scale_factor = 1.0
         self.tx,self.ty,self.tz = 0,0,3
-        self.extra_rotations = []
+        self.rotation_matrix = identity()   # накопленное вращение
+
+        # очередь анимаций
+        self.animations = []
 
         # геометрия буквы
         self.verts,self.edges = define_P()
@@ -129,6 +132,16 @@ class Canvas(glcanvas.GLCanvas):
         for ch in s:
             glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, ord(ch))
 
+    # мгновенные вращения
+    def rot_x(self, angle): self.rotation_matrix = mat_mul(rot_x(angle), self.rotation_matrix)
+    def rot_y(self, angle): self.rotation_matrix = mat_mul(rot_y(angle), self.rotation_matrix)
+    def rot_z(self, angle): self.rotation_matrix = mat_mul(rot_z(angle), self.rotation_matrix)
+
+    # запуск анимации вращения
+    def animate_rotation(self, axis, angle, steps=40):
+        step = angle / steps
+        self.animations.append([axis, angle, step, 0.0])
+
     # отрисовка
     def paint(self, e):
         dc = wx.PaintDC(self)
@@ -137,15 +150,21 @@ class Canvas(glcanvas.GLCanvas):
         glClear(GL_COLOR_BUFFER_BIT)
         w, h = self.GetClientSize()
 
-        # буква
+        # обновляем анимации
+        for anim in self.animations[:]:
+            axis, total, step, done = anim
+            if abs(done + step) <= abs(total) + 1e-6:
+                self.rotation_matrix = mat_mul(rot_axis(axis, step), self.rotation_matrix)
+                anim[3] += step
+            else:
+                self.animations.remove(anim)
+
+        # матрица буквы
         m_letter = scale(self.scale_factor, self.scale_factor, self.scale_factor)
-        m_letter = mat_mul(rot_x(self.rx), m_letter)
-        m_letter = mat_mul(rot_y(self.ry), m_letter)
-        m_letter = mat_mul(rot_z(self.rz), m_letter)
-        for axis, ang in self.extra_rotations:
-            m_letter = mat_mul(rot_axis(axis, ang), m_letter)
+        m_letter = mat_mul(self.rotation_matrix, m_letter)
         m_letter = mat_mul(transpose(self.tx, self.ty, self.tz), m_letter)
 
+        # --- рендер буквы ---
         glColor3f(.1, .2, .8)
         glBegin(GL_LINES)
         for i, j in self.edges:
@@ -159,23 +178,20 @@ class Canvas(glcanvas.GLCanvas):
             origin = (0, 0, 0)
             axis_scale = 1.0
             offset = 0.1
-
             for vec, col, label in self.axes:
                 if label in ("(1,1,0)", "(1,1,1)"):
-                    end3d = (vec[0] * axis_scale + offset, vec[1] * axis_scale + offset, vec[2] * axis_scale + offset)
+                    end3d = (vec[0]*axis_scale+offset, vec[1]*axis_scale+offset, vec[2]*axis_scale+offset)
                 else:
-                    end3d = (vec[0] * axis_scale, vec[1] * axis_scale, vec[2] * axis_scale)
-
+                    end3d = (vec[0]*axis_scale, vec[1]*axis_scale, vec[2]*axis_scale)
                 p1 = self.proj(identity(), origin, w, h)
                 p2 = self.proj(identity(), end3d, w, h)
                 if not p1 or not p2: continue
-
                 glColor3f(*col)
                 glBegin(GL_LINES)
                 glVertex2f(*p1)
                 glVertex2f(*p2)
                 glEnd()
-                self.txt(p2[0] + 5, p2[1] + 5, label)
+                self.txt(p2[0]+5, p2[1]+5, label)
 
         self.SwapBuffers()
 
@@ -189,19 +205,28 @@ class Frame(wx.Frame):
         sizer.Add(self.cv,1,wx.EXPAND)
 
         grid = wx.GridSizer(6,6,5,5)
-        def btn(label, fn): b=wx.Button(panel,label=label); b.Bind(wx.EVT_BUTTON,fn); grid.Add(b,0,wx.EXPAND)
+        def btn(label, fn):
+            b=wx.Button(panel,label=label);
+            b.Bind(wx.EVT_BUTTON,fn);
+            grid.Add(b,0,wx.EXPAND)
 
-        # управление
+        # перемещения
         btn("X+", lambda e:self.move(.1,0,0)); btn("X-", lambda e:self.move(-.1,0,0))
         btn("Y+", lambda e:self.move(0,.1,0)); btn("Y-", lambda e:self.move(0,-.1,0))
         btn("Z+", lambda e:self.move(0,0,.1)); btn("Z-", lambda e:self.move(0,0,-.1))
-        btn("RotX+", lambda e:self.rot(.1,0,0)); btn("RotX-", lambda e:self.rot(-.1,0,0))
-        btn("RotY+", lambda e:self.rot(0,.1,0)); btn("RotY-", lambda e:self.rot(0,-.1,0))
-        btn("RotZ+", lambda e:self.rot(0,0,.1)); btn("RotZ-", lambda e:self.rot(0,0,-.1))
-        btn("Axis(1,1,0)+", lambda e:self.rot_axis((1,1,0),.1))
-        btn("Axis(1,1,0)-", lambda e:self.rot_axis((1,1,0),-.1))
-        btn("Axis(1,1,1)+", lambda e:self.rot_axis((1,1,1),.1))
-        btn("Axis(1,1,1)-", lambda e:self.rot_axis((1,1,1),-.1))
+
+        # анимации по диагональным осям
+        btn("Axis(1,1,0)+", lambda e:self.cv.animate_rotation((1,1,0), 6.3))
+        btn("Axis(1,1,0)-", lambda e:self.cv.animate_rotation((1,1,0), -6.3))
+        btn("Axis(1,1,1)+", lambda e:self.cv.animate_rotation((1,1,1), 6.3))
+        btn("Axis(1,1,1)-", lambda e:self.cv.animate_rotation((1,1,1), -6.3))
+
+        # мгновенные вращения
+        btn("RotX+", lambda e:self.cv.rot_x(.1)); btn("RotX-", lambda e:self.cv.rot_x(-.1))
+        btn("RotY+", lambda e:self.cv.rot_y(.1)); btn("RotY-", lambda e:self.cv.rot_y(-.1))
+        btn("RotZ+", lambda e:self.cv.rot_z(.1)); btn("RotZ-", lambda e:self.cv.rot_z(-.1))
+
+        # масштаб и оси
         btn("Scale+", lambda e:self.scale(1.1))
         btn("Scale-", lambda e:self.scale(.9))
         btn("Toggle Axes", lambda e:self.toggle_axes())
@@ -210,16 +235,15 @@ class Frame(wx.Frame):
         panel.SetSizer(sizer)
         self.Show()
 
-    # управление из кнопок
+    # управление
     def move(self, dx, dy, dz): self.cv.tx+=dx; self.cv.ty+=dy; self.cv.tz+=dz
-    def rot(self, rx, ry, rz): self.cv.rx+=rx; self.cv.ry+=ry; self.cv.rz+=rz
-    def rot_axis(self, axis, ang): self.cv.extra_rotations.append((axis, ang))
     def scale(self, f): self.cv.scale_factor *= f
     def toggle_axes(self): self.cv.show_axes = not self.cv.show_axes
 
+
 if __name__=="__main__":
     from OpenGL.GLUT import glutInit, glutBitmapCharacter, GLUT_BITMAP_HELVETICA_12
-    glutInit() # для вывода текста
+    glutInit()
     app = wx.App(False)
     Frame()
     app.MainLoop()
