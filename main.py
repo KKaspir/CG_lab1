@@ -60,6 +60,29 @@ def rot_axis(axis, angle):
     m[2][2] = c + z*z*mc
     return m
 
+def normalize(v):
+    l = math.sqrt(sum(x*x for x in v))
+    return tuple(x/l for x in v)
+
+def cross(a,b):
+    return (a[1]*b[2]-a[2]*b[1],
+            a[2]*b[0]-a[0]*b[2],
+            a[0]*b[1]-a[1]*b[0])
+
+def dot(a,b):
+    return sum(x*y for x,y in zip(a,b))
+
+def look_at(eye, target, up=(0,1,0)):
+    f = normalize((target[0]-eye[0], target[1]-eye[1], target[2]-eye[2]))
+    s = normalize(cross(f, up))
+    u = cross(s, f)
+    m = identity()
+    m[0][0], m[0][1], m[0][2] = s
+    m[1][0], m[1][1], m[1][2] = u
+    m[2][0], m[2][1], m[2][2] = [-f[i] for i in range(3)]
+    trans = transpose(-eye[0], -eye[1], -eye[2])
+    return mat_mul(m, trans)
+
 # строим букву P
 def define_P(depth=0.3, steps=20):
     height, width = 1.0, 0.3
@@ -77,7 +100,16 @@ def define_P(depth=0.3, steps=20):
     for i in range(n-1): edges.append((i,i+1))
     for i in range(n-1): edges.append((i+n,i+1+n))
     for i in range(n): edges.append((i,i+n))
-    return verts, edges
+
+    # Сдвигаем букву в неотрицательные координаты
+    xs = [v[0] for v in verts]
+    ys = [v[1] for v in verts]
+    zs = [v[2] for v in verts]
+    xmin, ymin, zmin = min(xs), min(ys), min(zs)
+
+    verts_shifted = [(v[0] - xmin, v[1] - ymin, v[2] - zmin) for v in verts]
+
+    return verts_shifted, edges
 
 
 class Canvas(glcanvas.GLCanvas):
@@ -90,7 +122,7 @@ class Canvas(glcanvas.GLCanvas):
 
         # трансформации буквы
         self.scale_factor = 1.0
-        self.tx,self.ty,self.tz = 0,0,3
+        self.tx,self.ty,self.tz = 0,0,0
         self.rotation_matrix = identity()   # накопленное вращение
 
         # очередь анимаций
@@ -119,11 +151,16 @@ class Canvas(glcanvas.GLCanvas):
 
     # простая 3D -> 2D проекция с фиксированной камерой
     def proj(self, m, v, w, h, c=5.0, eps=1e-6):
-        xw, yw, zw, _ = mat_vec(m, [v[0],v[1],v[2],1])
+        # матрица камеры
+        view = look_at((1, 1, 1), (0, 0, 0))
+        mv = mat_mul(view, m)
+
+        xw, yw, zw, _ = mat_vec(mv, [v[0], v[1], v[2], 1])
         d = c - zw
-        if d <= eps: return None
+        if d <= eps:
+            return None
         t = c / d
-        return (w/2 + t*xw*w/3, h/2 + t*yw*h/3)
+        return (w / 2 + t * xw * w / 3, h / 2 + t * yw * h / 3)
 
     # вывод текста
     def txt(self, x, y, s):
@@ -195,10 +232,17 @@ class Canvas(glcanvas.GLCanvas):
 
         self.SwapBuffers()
 
+    # восстанавливаем состояние
+    def reset(self):
+        self.scale_factor = 1.0
+        self.tx, self.ty, self.tz = 0, 0, 0
+        self.rotation_matrix = identity()
+        self.animations.clear()
+
 
 class Frame(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="Letter P", size=(900,700))
+        super().__init__(None, title="CG lab1 Pravdin PI-22", size=(900,700))
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
         self.cv = Canvas(panel)
@@ -216,20 +260,23 @@ class Frame(wx.Frame):
         btn("Z+", lambda e:self.move(0,0,.1)); btn("Z-", lambda e:self.move(0,0,-.1))
 
         # анимации по диагональным осям
-        btn("Axis(1,1,0)+", lambda e:self.cv.animate_rotation((1,1,0), 6.3))
-        btn("Axis(1,1,0)-", lambda e:self.cv.animate_rotation((1,1,0), -6.3))
-        btn("Axis(1,1,1)+", lambda e:self.cv.animate_rotation((1,1,1), 6.3))
-        btn("Axis(1,1,1)-", lambda e:self.cv.animate_rotation((1,1,1), -6.3))
+        btn("Axis(1,1,0)+", lambda e:self.cv.animate_rotation((1,1,0), 6.2834))
+        btn("Axis(1,1,0)-", lambda e:self.cv.animate_rotation((1,1,0), -6.2834))
+        btn("Axis(1,1,1)+", lambda e:self.cv.animate_rotation((1,1,1), 6.2834))
+        btn("Axis(1,1,1)-", lambda e:self.cv.animate_rotation((1,1,1), -6.2834))
 
         # мгновенные вращения
         btn("RotX+", lambda e:self.cv.rot_x(.1)); btn("RotX-", lambda e:self.cv.rot_x(-.1))
         btn("RotY+", lambda e:self.cv.rot_y(.1)); btn("RotY-", lambda e:self.cv.rot_y(-.1))
         btn("RotZ+", lambda e:self.cv.rot_z(.1)); btn("RotZ-", lambda e:self.cv.rot_z(-.1))
 
-        # масштаб и оси
+        # масштаб
         btn("Scale+", lambda e:self.scale(1.1))
         btn("Scale-", lambda e:self.scale(.9))
+
+        # отображение осей и восстановление состояния
         btn("Toggle Axes", lambda e:self.toggle_axes())
+        btn("Reset", lambda e: self.cv.reset())
 
         sizer.Add(grid,0,wx.ALL|wx.EXPAND,10)
         panel.SetSizer(sizer)
