@@ -124,6 +124,7 @@ class Canvas(glcanvas.GLCanvas):
         self.scale_factor = 1.0
         self.tx,self.ty,self.tz = 0,0,0
         self.rotation_matrix = identity()   # накопленное вращение
+        self.model_matrix = identity()      # итоговая матрица модели
 
         # очередь анимаций
         self.animations = []
@@ -149,12 +150,17 @@ class Canvas(glcanvas.GLCanvas):
         glOrtho(0,w,0,h,-1,1)
         glMatrixMode(GL_MODELVIEW)
 
+    # обновление матрицы модели
+    def update_model_matrix(self):
+        m = scale(self.scale_factor, self.scale_factor, self.scale_factor)
+        m = mat_mul(self.rotation_matrix, m)
+        m = mat_mul(transpose(self.tx, self.ty, self.tz), m)
+        self.model_matrix = m
+
     # простая 3D -> 2D проекция с фиксированной камерой
     def proj(self, m, v, w, h, c=5.0, eps=1e-6):
-        # матрица камеры
-        view = look_at((1, 1, 1), (0, 0, 0))
+        view = look_at((1, 1, 1), (0, 1, 1))
         mv = mat_mul(view, m)
-
         xw, yw, zw, _ = mat_vec(mv, [v[0], v[1], v[2], 1])
         d = c - zw
         if d <= eps:
@@ -196,18 +202,18 @@ class Canvas(glcanvas.GLCanvas):
             else:
                 self.animations.remove(anim)
 
-        # матрица буквы
-        m_letter = scale(self.scale_factor, self.scale_factor, self.scale_factor)
-        m_letter = mat_mul(self.rotation_matrix, m_letter)
-        m_letter = mat_mul(transpose(self.tx, self.ty, self.tz), m_letter)
+        # пересобираем матрицу модели
+        self.update_model_matrix()
 
         # --- рендер буквы ---
         glColor3f(.1, .2, .8)
         glBegin(GL_LINES)
         for i, j in self.edges:
-            p1 = self.proj(m_letter, self.verts[i], w, h)
-            p2 = self.proj(m_letter, self.verts[j], w, h)
-            if p1 and p2: glVertex2f(*p1); glVertex2f(*p2)
+            p1 = self.proj(self.model_matrix, self.verts[i], w, h)
+            p2 = self.proj(self.model_matrix, self.verts[j], w, h)
+            if p1 and p2:
+                glVertex2f(*p1)
+                glVertex2f(*p2)
         glEnd()
 
         # оси мира
@@ -237,7 +243,13 @@ class Canvas(glcanvas.GLCanvas):
         self.scale_factor = 1.0
         self.tx, self.ty, self.tz = 0, 0, 0
         self.rotation_matrix = identity()
+        self.model_matrix = identity()
         self.animations.clear()
+
+    def show_matrix(self):
+        print("Матрица модели сброшена:")
+        for row in self.model_matrix:
+            print(row)
 
 
 class Frame(wx.Frame):
@@ -277,6 +289,8 @@ class Frame(wx.Frame):
         # отображение осей и восстановление состояния
         btn("Toggle Axes", lambda e:self.toggle_axes())
         btn("Reset", lambda e: self.cv.reset())
+        btn("Show Matrix", lambda e: self.cv.show_matrix())
+
 
         sizer.Add(grid,0,wx.ALL|wx.EXPAND,10)
         panel.SetSizer(sizer)
@@ -286,6 +300,7 @@ class Frame(wx.Frame):
     def move(self, dx, dy, dz): self.cv.tx+=dx; self.cv.ty+=dy; self.cv.tz+=dz
     def scale(self, f): self.cv.scale_factor *= f
     def toggle_axes(self): self.cv.show_axes = not self.cv.show_axes
+
 
 
 if __name__=="__main__":
